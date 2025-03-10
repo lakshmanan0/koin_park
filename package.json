@@ -1,0 +1,20 @@
+{
+  "name": "staking",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "nodemon server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.2",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.13.0",
+    "node-cron": "^3.0.3",
+    "node-input-validator": "^4.5.1",
+    "nodemon": "^3.1.9"
+  }
+}
