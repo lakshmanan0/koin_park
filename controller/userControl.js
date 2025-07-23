@@ -1462,6 +1462,278 @@ export default router;
 
 
 
+Find your current username**:
+   ```bash
+   whoami
+   # or
+   echo $USER
+   ```
+# From your project root
+ls -la client/assets/
+# Or for the specific target directory
+ls -ld documents/teams/experplus/client/assets
+
+# Ensure the directory exists
+mkdir -p client/assets
+
+# Give your user ownership (replace "youruser" with actual username)
+sudo chown -R youruser:youruser client/assets
+
+# Set appropriate permissions (read/write/execute for owner, read/execute for others)
+chmod -R 755 client/assets
+
+
+# Test writing a file
+node -e "require('fs').writeFileSync('client/assets/test.txt', 'test')"
+
+
+chmod -R 755 client/assets
+
+
+
+
+project-root/
+├── client/
+│   └── assets/          # Upload destination (relative path)
+├── server/
+│   ├── config/
+│   ├── controllers/
+│   ├── middlewares/
+│   ├── routes/
+│   └── app.js
+└── package.json
+```
+
+## 2. File Upload Middleware
+
+**server/middlewares/uploadMiddleware.js**
+
+```javascript
+const path = require('path');
+const multer = require('multer');
+const fs = require('fs');
+
+// Relative to project root
+const UPLOAD_DIR = path.join(__dirname, '../../client/assets');
+
+// Ensure upload directory exists
+const ensureUploadDir = () => {
+  if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { 
+      recursive: true,
+      mode: 0o755 // rwxr-xr-x permissions
+    });
+  }
+};
+
+// Configure storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    ensureUploadDir();
+    cb(null, UPLOAD_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+// File filter
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only JPEG, PNG, and GIF images are allowed'), false);
+  }
+};
+
+// Configure Multer
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  }
+});
+
+module.exports = upload;
+```
+const path = require('path');
+const fs = require('fs');
+const { promisify } = require('util');
+const unlinkAsync = promisify(fs.unlink);
+
+// Relative path from project root
+const UPLOAD_DIR = path.join(__dirname, '../../client/assets');
+
+exports.uploadFile = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Construct relative path for database storage
+    const relativePath = path.relative(
+      path.join(__dirname, '../../'), 
+      req.file.path
+    );
+
+    // For demonstration - in real app, save to database
+    const fileData = {
+      originalName: req.file.originalname,
+      fileName: req.file.filename,
+      path: relativePath,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      url: `/assets/${req.file.filename}`
+    };
+
+    res.status(201).json({
+      success: true,
+      data: fileData
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'File upload failed' });
+  }
+};
+
+exports.deleteFile = async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const filePath = path.join(UPLOAD_DIR, filename);
+
+    await unlinkAsync(filePath);
+    
+    res.json({ 
+      success: true,
+      message: 'File deleted successfully' 
+    });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    res.status(500).json({ error: 'Error deleting file' });
+  }
+};
+
+
+const express = require('express');
+const router = express.Router();
+const uploadController = require('../controllers/uploadController');
+const upload = require('../middlewares/uploadMiddleware');
+const { protect } = require('../middlewares/authMiddleware');
+
+router.post(
+  '/',
+  protect,
+  upload.single('file'), // 'file' is the field name in form-data
+  uploadController.uploadFile
+);
+
+router.delete(
+  '/:filename',
+  protect,
+  uploadController.deleteFile
+);
+
+module.exports = router;
+
+const express = require('express');
+const path = require('path');
+const app = express();
+
+// Middlewares
+app.use(express.json());
+
+// Static files - serve from relative path
+const assetsDir = path.join(__dirname, '../client/assets');
+app.use('/assets', express.static(assetsDir));
+
+// Routes
+app.use('/api/uploads', require('./routes/uploadRoutes'));
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: err.message });
+  }
+  res.status(500).json({ error: err.message });
+});
+
+module.exports = app;
+
+import React, { useState } from 'react';
+import axios from 'axios';
+
+const FileUpload = () => {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setPreview(URL.createObjectURL(selectedFile));
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!file) return;
+
+    setUploading(true);
+    setError('');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await axios.post('/api/uploads', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      console.log('Upload successful:', response.data);
+      // Handle success (update state, show message, etc.)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="file-upload">
+      <form onSubmit={handleSubmit}>
+        <input type="file" onChange={handleFileChange} accept="image/*" />
+        {preview && (
+          <div className="preview">
+            <img src={preview} alt="Preview" style={{ maxWidth: '200px' }} />
+          </div>
+        )}
+        <button type="submit" disabled={!file || uploading}>
+          {uploading ? 'Uploading...' : 'Upload'}
+        </button>
+        {error && <div className="error">{error}</div>}
+      </form>
+    </div>
+  );
+};
+
+export default FileUpload;
+
+
+
+
+
+
+
 
 
 
